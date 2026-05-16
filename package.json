@@ -1,0 +1,18 @@
+{
+  "name": "auto-post-toptop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/cli/index.js",
+    "dry-run": "DRY_RUN=true node src/cli/index.js",
+    "inspect-upload": "node src/cli/inspectUpload.js",
+    "inspect-upload:quan-ao": "node src/cli/inspectUpload.js --user=ao_quan"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^7.0.0",
+    "dotenv": "^16.4.5",
+    "googleapis": "^144.0.0",
+    "playwright": "^1.48.2"
+  }
+}

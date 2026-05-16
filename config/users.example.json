@@ -1,0 +1,13 @@
+[
+  {
+    "name": "user_1",
+    "aliases": ["user_1"],
+    "chromeUserDataDir": "../chrome-profiles/user_1",
+    "sheetName": "Videos"
+  },
+  {
+    "name": "user_2",
+    "chromeUserDataDir": "../chrome-profiles/user_2",
+    "sheetName": "Videos"
+  }
+]
