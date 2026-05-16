@@ -2,7 +2,7 @@ import { selectors } from "./selectors.js";
 import { sleep } from "../utils/retry.js";
 
 export async function uploadVideo({ context, video, videoPath, logger, dryRun, uploadUrl }) {
-  const page = context.pages()[0] || (await context.newPage());
+  const page = await context.newPage();
 
   logger.info(`Opening TikTok upload page for ${video.ID}`);
   await page.goto(uploadUrl, { waitUntil: "domcontentloaded" });

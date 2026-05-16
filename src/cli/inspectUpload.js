@@ -30,7 +30,7 @@ async function main() {
   });
 
   try {
-    const page = context.pages()[0] || (await context.newPage());
+    const page = await context.newPage();
     logger.info(`Opening ${config.tiktokUploadUrl}`);
     await page.goto(config.tiktokUploadUrl, { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});

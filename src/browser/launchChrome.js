@@ -5,44 +5,45 @@ export async function launchChromeProfile({ user, headless }) {
     throw new Error(`User ${user.name} is missing chromeUserDataDir.`);
   }
 
+  return await launchPersistentChrome({
+    userDataDir: user.chromeUserDataDir,
+    profileDirectory: user.chromeProfileDirectory,
+    headless
+  });
+}
+
+async function launchPersistentChrome({ userDataDir, profileDirectory, headless }) {
+  const args = ["--disable-dev-shm-usage"];
+  if (profileDirectory) {
+    args.push(`--profile-directory=${profileDirectory}`);
+  }
+
   try {
-    return await launchPersistentChrome({
-      userDataDir: user.chromeUserDataDir,
-      profileDirectory: user.chromeProfileDirectory,
-      headless
+    return await chromium.launchPersistentContext(userDataDir, {
+      channel: "chrome",
+      headless,
+      viewport: { width: 1365, height: 900 },
+      args,
+      locale: "vi-VN",
+      timeout: 60000,
+      ignoreDefaultArgs: ["--no-sandbox"]
     });
   } catch (error) {
-    if (error.message.includes("Target page, context or browser has been closed")) {
+    if (error.name === "TimeoutError") {
       throw new Error(
-        [
-          `Cannot open Chrome profile for ${user.name}.`,
-          `Chrome user data is still locked by a running Google Chrome process.`,
-          `The tool will not fallback to another profile because that would use the wrong TikTok user.`,
-          `Quit Google Chrome completely, then run again.`,
-          `Profile: ${user.chromeProfileDirectory || "Default"}.`,
-          `Path: ${user.chromeUserDataDir}.`
-        ].join(" ")
+        `Chrome launch timed out. Make sure Chrome is installed, close any running Chrome instances using the same profile/data directory, and use a dedicated automation profile path in config/users.json if needed. Original error: ${error.message}`
+      );
+    }
+
+    if (
+      error.message.includes("Target page, context or browser has been closed") ||
+      error.message.includes("Mở trong phiên trình duyệt hiện tại")
+    ) {
+      throw new Error(
+        `Chrome failed to attach to the requested profile. Close any running Chrome instance using this profile or use a separate automation-only chromeUserDataDir in config/users.json. Original error: ${error.message}`
       );
     }
 
     throw error;
   }
-}
-
-async function launchPersistentChrome({ userDataDir, profileDirectory, headless }) {
-  const args = [
-    "--disable-blink-features=AutomationControlled",
-    "--disable-dev-shm-usage"
-  ];
-  if (profileDirectory) {
-    args.push(`--profile-directory=${profileDirectory}`);
-  }
-
-  return chromium.launchPersistentContext(userDataDir, {
-    channel: "chrome",
-    headless,
-    viewport: { width: 1365, height: 900 },
-    args,
-    locale: "vi-VN"
-  });
 }

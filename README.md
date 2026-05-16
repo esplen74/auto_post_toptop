@@ -157,6 +157,10 @@ Mặc định tool đang để `DRY_RUN=true`, nghĩa là chỉ đọc sheet, ch
 
 `chromeUserDataDir` là thư mục riêng tool dùng để chạy automation, ví dụ `../chrome-profiles/user_1`.
 
+Không dùng thư mục Chrome chính của trình duyệt (ví dụ `/Users/<you>/Library/Application Support/Google/Chrome`) khi Chrome đang mở. Nếu dùng thư mục chính, Playwright có thể mở vào phiên trình duyệt hiện tại rồi đóng ngay, hoặc báo lỗi profile đang bị đóng.
+
+Nếu bạn thấy Chrome mở ra trắng và không hiện user, đó là vì `chromeUserDataDir` đang dùng một profile mới, chưa chứa đăng nhập TikTok. Bạn cần đăng nhập thủ công một lần vào profile này, hoặc copy profile Chrome đã đăng nhập vào thư mục automation trước khi chạy.
+
 TikTok Studio web có thể truy cập qua `https://www.tiktok.com/tiktokstudio`. Tool dùng `TIKTOK_UPLOAD_URL` cho bước upload để dễ chỉnh khi giao diện TikTok thay đổi.
 
 ## Video Local
