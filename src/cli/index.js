@@ -42,8 +42,10 @@ async function main() {
     sheetName: user.sheetName
   });
 
-  const videos = await repository.findPendingForUser(user.name, config.uploadLimitPerRun);
-  logger.info(`Found ${videos.length} eligible videos for ${user.name}`);
+  // The sheet for each user is configured in `user.sheetName`.
+  // Google Sheet no longer needs a `user` column — rows are per-sheet.
+  const videos = await repository.findPending(config.uploadLimitPerRun);
+  logger.info(`Found ${videos.length} eligible videos in sheet ${user.sheetName}`);
 
   if (videos.length === 0) {
     return;

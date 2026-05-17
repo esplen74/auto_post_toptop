@@ -1,6 +1,5 @@
 const REQUIRED_HEADERS = [
   "ID",
-  "user",
   "video_path",
   "caption",
   "status",
@@ -17,7 +16,7 @@ export class VideoRepository {
   }
 
   async listRows() {
-    const range = `${quoteSheetName(this.sheetName)}!A:Z`;
+    const range = `${quoteSheetName(this.sheetName)}!A1:Z1000`;
     const response = await this.sheets.spreadsheets.values.get({
       spreadsheetId: this.spreadsheetId,
       range
@@ -47,10 +46,19 @@ export class VideoRepository {
   async findPendingForUser(userName, limit) {
     const rows = await this.listRows();
     const now = new Date();
+    return rows
+      .filter((row) => row.video_path && row.video_path.trim() !== "")
+      .filter((row) => shouldPostStatus(row.status))
+      .filter((row) => isDue(row.scheduled_at, now))
+      .slice(0, limit);
+  }
+
+  async findPending(limit) {
+    const rows = await this.listRows();
+    const now = new Date();
 
     return rows
-      .filter((row) => normalizeUserKey(row.user) === normalizeUserKey(userName))
-      .filter((row) => row.video_path.trim() !== "")
+      .filter((row) => row.video_path && row.video_path.trim() !== "")
       .filter((row) => shouldPostStatus(row.status))
       .filter((row) => isDue(row.scheduled_at, now))
       .slice(0, limit);
@@ -112,7 +120,12 @@ function validateHeaders(headers) {
 }
 
 function quoteSheetName(sheetName) {
-  return `'${String(sheetName).replaceAll("'", "''")}'`;
+  // Only quote if the sheet name contains special characters, spaces, or starts with a number
+  const needsQuotes = /[\s!@#$%^&*()+=\-\[\]{};:'"<>?,./\\|`~]|^\d/.test(sheetName);
+  if (needsQuotes) {
+    return `'${String(sheetName).replaceAll("'", "''")}'`;
+  }
+  return sheetName;
 }
 
 function normalizeStatus(status) {

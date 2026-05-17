@@ -12,6 +12,11 @@ export function loadConfig() {
     process.env.USERS_CONFIG_PATH || "./config/users.json"
   );
 
+  const commonProfilesDir = resolveFromRoot(
+    rootDir,
+    process.env.CHROME_PROFILES_DIR || "../chrome-profiles"
+  );
+
   return {
     rootDir,
     googleSheetId: requireEnv("GOOGLE_SHEET_ID"),
@@ -26,11 +31,12 @@ export function loadConfig() {
     dryRun: process.env.DRY_RUN !== "false",
     tiktokUploadUrl:
       process.env.TIKTOK_UPLOAD_URL || "https://www.tiktok.com/tiktokstudio/upload",
-    users: loadUsers(rootDir, usersConfigPath)
+    users: loadUsers(rootDir, usersConfigPath, commonProfilesDir),
+    commonProfilesDir
   };
 }
 
-function loadUsers(rootDir, usersConfigPath) {
+function loadUsers(rootDir, usersConfigPath, commonProfilesDir) {
   if (!fs.existsSync(usersConfigPath)) {
     throw new Error(
       `Missing users config: ${usersConfigPath}. Copy config/users.example.json to config/users.json first.`
@@ -46,7 +52,7 @@ function loadUsers(rootDir, usersConfigPath) {
     ...user,
     chromeUserDataDir: user.chromeUserDataDir
       ? resolveFromRoot(rootDir, user.chromeUserDataDir)
-      : user.chromeUserDataDir
+      : path.resolve(commonProfilesDir, user.name)
   }));
 }
 

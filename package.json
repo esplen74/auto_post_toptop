@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "start": "node src/cli/index.js",
-    "dry-run": "DRY_RUN=true node src/cli/index.js",
+    "dry-run": "cross-env DRY_RUN=true node src/cli/index.js",
     "inspect-upload": "node src/cli/inspectUpload.js",
-    "inspect-upload:quan-ao": "node src/cli/inspectUpload.js --user=ao_quan"
+    "inspect-upload:quan-ao": "cross-env node src/cli/inspectUpload.js --user=ao_quan"
   },
   "dependencies": {
     "@inquirer/prompts": "^7.0.0",
+    "cross-env": "^7.0.3",
     "dotenv": "^16.4.5",
     "googleapis": "^144.0.0",
     "playwright": "^1.48.2"

@@ -17,178 +17,94 @@ Tool Node.js dùng Playwright để tự động đăng video TikTok trên Chrom
 
 1. Người dùng chạy tool bằng CLI.
 2. Tool hiển thị danh sách user TikTok đã cấu hình.
-3. Người dùng chọn user cần đăng.
-4. Tool đọc Google Sheet và lọc các dòng:
-   - đúng user được chọn
-   - trạng thái không phải `DONE` hoặc `ERROR`
-   - đường dẫn video local tồn tại
-5. Tool mở Chrome bằng profile tương ứng.
-6. Tool upload từng video như người dùng thao tác thật.
-7. Sau mỗi video, tool cập nhật Google Sheet:
-   - `UPLOADING`
-   - `DONE`
-   - `ERROR`
-8. Tool ghi log chi tiết vào thư mục `logs/`.
+# Auto TikTok Uploader
 
-## Google Sheet Schema Đề Xuất
+Phiên bản README này tóm tắt flow vận hành theo yêu cầu của bạn và hướng dẫn cấu hình để chạy hiện tại.
 
-Sheet nên có các cột sau:
+**Tóm tắt flow (hiện tại)**
+- Tool đọc Google Sheet và với mỗi dòng có `video_path` và `status` khác `DONE` sẽ thực hiện upload ngay (lập lịch sẽ phát triển sau).
+- Người dùng chọn URL / user upload qua CLI (có thể nâng cấp lên UI sau). Gợi ý lưu cấu hình user ở `config/users.json`.
+- Tool mở Chrome bằng profile tương ứng (thư mục `chrome-profiles` ngang hàng với project), vào trang upload, upload video, sửa caption dựa trên Google Sheet.
+- Trên màn hình TikTok Studio: tool sẽ tắt âm thanh gốc (remove original sound) rồi chọn ngẫu nhiên 1 bản nhạc từ danh sách Favorites mà bạn lưu sẵn.
+- Sau upload, tool sẽ kiểm tra 2 nút xác minh (vi phạm nhạc và vi phạm chính sách). Kết quả sẽ quyết định ghi `DONE` hay `ERROR` trên sheet.
 
-| Column | Ý nghĩa |
-| --- | --- |
-| `id` | ID duy nhất cho mỗi video |
-| `user` | Tên user/profile TikTok dùng để đăng |
-| `video_path` | Đường dẫn file video trên máy local |
-| `caption` | Nội dung caption |
-| `status` | Tool sẽ đăng nếu status không phải `DONE` hoặc `ERROR`; khi chạy sẽ ghi `UPLOADING`, thành công ghi `DONE`, lỗi ghi `ERROR` |
-| `scheduled_at` | Thời điểm muốn đăng, có thể để trống |
-| `posted_at` | Thời điểm đăng thành công |
-| `tiktok_url` | Link video sau khi đăng, nếu lấy được |
+## Luồng chi tiết theo yêu cầu
+1. Đọc Google Sheet: lọc dòng có `video_path` không rỗng và `status` != `DONE`.
+2. Chọn URL/user: CLI hiển thị các user từ `config/users.json`; người dùng chọn một user (hoặc truyền cờ CLI). Sau này có thể chuyển việc chọn này lên UI.
+3. Mở Chrome với profile của user (ví dụ `../chrome-profiles/<user>`). Nếu profile chưa đăng nhập TikTok, cần đăng nhập thủ công 1 lần.
+4. Vào trang upload (TikTok Studio) — URL có thể cấu hình trong `config/users.json` hoặc `.env`.
+5. Upload file video theo `video_path` và tự động điền `caption` từ Google Sheet.
+6. Chuyển sang phần edit audio: tắt âm thanh gốc (remove original sound), sau đó chọn 1 bản nhạc ngẫu nhiên từ Favorites.
+7. (Tương lai) Set lịch đăng nếu `scheduled_at` có giá trị — hiện chưa triển khai.
+8. Kiểm tra vi phạm: tool sẽ bấm 2 nút kiểm tra và đọc kết quả; nếu vi phạm thì ghi `ERROR` và dừng video đó, nếu không thì tiếp tục đăng và ghi `DONE` và `tiktok_url`.
 
-## Cấu Hình User Đề Xuất
-
-Mỗi user TikTok nên có một Chrome profile riêng để giữ session đăng nhập.
-
-Ví dụ file `config/users.json`:
+## Đề xuất cấu hình
+- File cấu hình người dùng: `config/users.json` (dùng `config/users.example.json` làm mẫu). Ví dụ:
 
 ```json
 [
   {
     "name": "user_1",
     "chromeUserDataDir": "../chrome-profiles/user_1",
-    "sheetName": "Videos"
-  },
-  {
-    "name": "user_2",
-    "chromeUserDataDir": "../chrome-profiles/user_2",
-    "sheetName": "Videos"
+    "sheetName": "Videos",
+    "uploadUrl": "https://www.tiktok.com/tiktokstudio/upload"
   }
 ]
 ```
 
-Không commit file cấu hình thật nếu có thông tin nhạy cảm.
+- Thư mục Chrome profiles: tạo `chrome-profiles` ở ngang hàng với project root (ví dụ cùng cấp với `auto_post_toptop`). Mỗi user 1 subfolder.
 
-## Cấu Trúc Project Đề Xuất
+## Google Sheet - Schema tối thiểu
+- `id` — id dòng
+- `user` — tên user tương ứng
+- `video_path` — đường dẫn video (tương đối với `VIDEO_ROOT` hoặc tuyệt đối)
+- `caption` — caption để điền
+- `status` — `PENDING` | `UPLOADING` | `DONE` | `ERROR`
+- `scheduled_at` — (tùy) thời điểm muốn đăng
+- `posted_at` — thời gian đăng thành công
+- `tiktok_url` — link video sau khi đăng
 
-```text
-auto_post_toptop/
-  README.md
-  package.json
-  .env.example
-  config/
-    users.example.json
-  src/
-    cli/
-      index.js
-    config/
-      loadConfig.js
-    google/
-      sheetsClient.js
-      videoRepository.js
-    tiktok/
-      uploader.js
-      selectors.js
-    browser/
-      launchChrome.js
-    logging/
-      logger.js
-    utils/
-      file.js
-      retry.js
-  logs/
+Lưu ý: sheet hiện giờ không cần cột `user`. Thay vào đó mỗi user có thể có 1 sheet (tab) riêng — cấu hình `user.sheetName` trong `config/users.json` chỉ tới sheet cho user đó.
+
+Flow quyết định: tool chỉ xử lý các dòng `status` != `DONE`.
+
+## Hướng dẫn cài đặt nhanh
+1. Cài Node.js (phiên bản LTS). Rồi chạy:
+
+```powershell
+npm install
 ```
 
-## Công Nghệ
+2. Bảo đảm `credentials/google-service-account.json` chứa service account nếu dùng service account, và share Google Sheet cho email service account.
+3. Copy và chỉnh `config/users.example.json` → `config/users.json`.
+4. Tạo `chrome-profiles/` ngang hàng với project và cho mỗi user 1 folder (hoặc để Playwright tạo sau và đăng nhập thủ công 1 lần).
+5. Đặt `VIDEO_ROOT` trong `.env` nếu bạn dùng path tương đối.
 
-- Node.js
-- Playwright
-- Google Sheets API
-- Inquirer hoặc prompts cho CLI chọn user
-- dotenv cho biến môi trường
-- pino hoặc winston cho logging
+Chạy inspect/upload thử:
 
-## Biến Môi Trường Đề Xuất
-
-```env
-GOOGLE_SHEET_ID=
-GOOGLE_APPLICATION_CREDENTIALS=
-VIDEO_ROOT=../videos
-TIKTOK_UPLOAD_URL=https://www.tiktok.com/tiktokstudio/upload?from=creator_center&tab=video
-HEADLESS=false
-UPLOAD_LIMIT_PER_RUN=5
+```powershell
+npm run inspect-upload
 ```
 
-## Ghi Chú Vận Hành
+hoặc CLI (tùy script hiện có):
 
-- Nên dùng Chrome profile riêng cho automation để có thể mở Chrome `Default` làm việc khác cùng lúc.
-- Không chạy song song cùng một automation profile.
-- Nếu TikTok Studio yêu cầu login trong automation profile, login thủ công trong cửa sổ Chrome tool mở rồi chạy lại.
-- Nên giới hạn số video mỗi lần chạy để giảm rủi ro lỗi và dễ kiểm soát.
-- Nên thêm delay ngẫu nhiên nhẹ giữa các thao tác để giống hành vi người dùng hơn.
-- UI TikTok có thể thay đổi, nên selector cần tách riêng trong `src/tiktok/selectors.js`.
-
-## Quyết Định Cần Chốt
-
-- Google Sheet dùng OAuth cá nhân hay service account?
-- Video local nằm trong một thư mục cố định hay mỗi dòng có đường dẫn đầy đủ?
-- Tool chỉ chạy CLI hay cần giao diện web nhỏ để chọn user?
-- Có cần đặt lịch đăng theo `scheduled_at` hay chỉ đăng ngay các dòng chưa `DONE`/`ERROR`?
-- Sau khi đăng xong có cần di chuyển file video sang thư mục archive không?
-
-## Bước Setup Hiện Tại
-
-1. Copy `.env.example` thành `.env`.
-2. Điền `GOOGLE_SHEET_ID` trong `.env`.
-3. Tạo Google service account, tải file JSON vào `credentials/google-service-account.json`.
-4. Share Google Sheet cho email service account với quyền Editor.
-5. Copy `config/users.example.json` thành `config/users.json`.
-6. Sửa `name`, `chromeUserDataDir`, `sheetName` cho từng user.
-7. Chạy `npm install`.
-8. Chạy thử bằng `npm run dry-run`.
-9. Inspect UI TikTok Studio bằng `npm run inspect-upload` khi cần cập nhật selector.
-
-Có thể inspect trực tiếp user `quan_ao` bằng:
-
-```bash
-npm run inspect-upload:quan-ao
+```powershell
+npm run start -- --user user_1
 ```
 
-Mặc định tool đang để `DRY_RUN=true`, nghĩa là chỉ đọc sheet, chọn user, kiểm tra video local và mở luồng chạy thử. Khi đã sẵn sàng đăng thật, đổi `DRY_RUN=false`.
+## Ghi chú vận hành
+- Không dùng profile Chrome đang mở trong trình duyệt chính; nên dùng profile riêng cho automation.
+- Nếu profile mới, mở thủ công và đăng nhập TikTok một lần.
+- Mỗi bước UI (upload, edit audio, check violations) cần selectors ổn định; tách selectors vào `src/tiktok/selectors.js`.
+- Khi phát hiện vi phạm nhạc/chính sách, tool nên ghi `ERROR` trên sheet và lưu log chi tiết.
 
-`chromeUserDataDir` là thư mục riêng tool dùng để chạy automation, ví dụ `../chrome-profiles/user_1`.
+## Về `inspectUpload.js`
+- `src/cli/inspectUpload.js` hiện đã có phần code để inspect UI và thử luồng upload — dùng file này làm reference khi tách các bước hàm: `openProfile`, `navigateToUpload`, `uploadVideo`, `applyCaption`, `removeOriginalSound`, `pickFavoriteMusic`, `checkViolations`, `updateSheet`.
 
-Không dùng thư mục Chrome chính của trình duyệt (ví dụ `/Users/<you>/Library/Application Support/Google/Chrome`) khi Chrome đang mở. Nếu dùng thư mục chính, Playwright có thể mở vào phiên trình duyệt hiện tại rồi đóng ngay, hoặc báo lỗi profile đang bị đóng.
+## Bước tiếp theo (gợi ý)
+Bạn muốn tôi thực hiện tiếp theo nào trong danh sách dưới đây?
+1) Refactor `src/cli/inspectUpload.js` thành các hàm mô-đun theo flow ở trên.
+2) Tạo mẫu `config/users.json` và script CLI để chọn user.
+3) Viết module small để đọc sheet + dry-run và log kết quả.
 
-Nếu bạn thấy Chrome mở ra trắng và không hiện user, đó là vì `chromeUserDataDir` đang dùng một profile mới, chưa chứa đăng nhập TikTok. Bạn cần đăng nhập thủ công một lần vào profile này, hoặc copy profile Chrome đã đăng nhập vào thư mục automation trước khi chạy.
-
-TikTok Studio web có thể truy cập qua `https://www.tiktok.com/tiktokstudio`. Tool dùng `TIKTOK_UPLOAD_URL` cho bước upload để dễ chỉnh khi giao diện TikTok thay đổi.
-
-## Video Local
-
-Nên để thư mục video nằm ngang hàng với project:
-
-```text
-Auto_TopTop/
-  auto_post_toptop/
-  videos/
-    ao_quan/
-      ao_quan_001.mp4
-      ao_quan_002.mp4
-    do_an/
-      do_an_001.mp4
-```
-
-Khi đó `.env` dùng:
-
-```env
-VIDEO_ROOT=../videos
-```
-
-Trong Google Sheet, cột `video_path` chỉ cần điền path tương đối:
-
-```text
-ao_quan/ao_quan_001.mp4
-do_an/do_an_001.mp4
-```
-
-Trên Windows, chỉ cần đổi `VIDEO_ROOT` trong `.env` của máy Windows, còn Google Sheet giữ nguyên.
+Nói tôi biết bạn chọn gì, tôi sẽ tiếp tục.
