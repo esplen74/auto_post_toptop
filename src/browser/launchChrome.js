@@ -37,7 +37,17 @@ export async function launchChromeProfile({
   }
 );
 
-await page.waitForTimeout(5000);
+// Fast-path: check synchronously for the file input first to avoid waitForSelector delays.
+const fileInputHandle = await page.$("input[type='file'][accept*='video']");
+if (!fileInputHandle) {
+  try {
+    // Wait briefly for the input to appear (short timeout)
+    await page.waitForSelector("input[type='file'][accept*='video']", { state: 'attached', timeout: 800 });
+  } catch (_) {
+    // Final fallback: tiny delay so page can settle
+    await page.waitForTimeout(200);
+  }
+}
 
   return context;
 }

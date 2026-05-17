@@ -1,5 +1,6 @@
 const REQUIRED_HEADERS = [
   "ID",
+  "user",
   "video_path",
   "caption",
   "status",
@@ -85,18 +86,27 @@ export class VideoRepository {
   }
 
   async updateCells(rowNumber, updates) {
-    const headers = REQUIRED_HEADERS;
-    const data = Object.entries(updates).map(([header, value]) => {
-      const columnIndex = headers.indexOf(header);
-      if (columnIndex === -1) {
-        throw new Error(`Unknown sheet header: ${header}`);
-      }
+      // Read actual header row from the sheet to determine column indices —
+      // do not rely on the static REQUIRED_HEADERS order when updating cells.
+      const headerRange = `${quoteSheetName(this.sheetName)}!A1:Z1`;
+      const headerResp = await this.sheets.spreadsheets.values.get({
+        spreadsheetId: this.spreadsheetId,
+        range: headerRange
+      });
 
-      return {
-        range: `${quoteSheetName(this.sheetName)}!${toColumnName(columnIndex + 1)}${rowNumber}`,
-        values: [[value]]
-      };
-    });
+      const headers = (headerResp.data.values && headerResp.data.values[0]) || [];
+
+      const data = Object.entries(updates).map(([header, value]) => {
+        const columnIndex = headers.indexOf(header);
+        if (columnIndex === -1) {
+          throw new Error(`Unknown sheet header: ${header}`);
+        }
+
+        return {
+          range: `${quoteSheetName(this.sheetName)}!${toColumnName(columnIndex + 1)}${rowNumber}`,
+          values: [[value]]
+        };
+      });
 
     if (data.length === 0) {
       return;

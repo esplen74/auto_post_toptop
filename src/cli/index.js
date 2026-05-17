@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { select, confirm } from "@inquirer/prompts";
+import path from "node:path";
+import fs from "node:fs";
 import { loadConfig } from "../config/loadConfig.js";
 import { createLogger } from "../logging/logger.js";
 import { createSheetsClient } from "../google/sheetsClient.js";
@@ -14,52 +15,79 @@ async function main() {
   const config = loadConfig();
   const logger = createLogger(config.rootDir);
 
-  const userName = await select({
-    message: "Chọn TikTok user để đăng video",
-    choices: config.users.map((user) => ({
-      name: user.name,
-      value: user.name
-    }))
-  });
-
-  const user = config.users.find((item) => item.name === userName);
-  const shouldContinue = await confirm({
-    message: config.dryRun
-      ? `Đang ở DRY_RUN=true. Chạy thử với user ${user.name}?`
-      : `Sẽ mở Chrome và đăng thật với user ${user.name}. Tiếp tục?`,
-    default: config.dryRun
-  });
-
-  if (!shouldContinue) {
-    logger.info("Cancelled by user");
-    return;
-  }
-
   const sheets = await createSheetsClient(config.googleCredentialsPath);
   const repository = new VideoRepository({
     sheets,
     spreadsheetId: config.googleSheetId,
-    sheetName: user.sheetName
+    sheetName: config.users[0].sheetName
   });
 
-  // The sheet for each user is configured in `user.sheetName`.
-  // Google Sheet no longer needs a `user` column — rows are per-sheet.
-  const videos = await repository.findPending(config.uploadLimitPerRun);
-  logger.info(`Found ${videos.length} eligible videos in sheet ${user.sheetName}`);
+  // Process videos one-at-a-time to ensure a single failing row does not abort other rows.
+  const limit = Number(config.uploadLimitPerRun || 3);
+  let processed = 0;
 
-  if (videos.length === 0) {
-    return;
-  }
+  while (processed < limit) {
+    const items = await repository.findPending(1);
+    if (!items || items.length === 0) {
+      logger.info("No more pending videos to process.");
+      break;
+    }
 
-  const context = await launchChromeProfile({
-    user,
-    headless: config.headless
-  });
+    const video = items[0];
+    const userKey = (video.user || "").toString().trim();
+    if (!userKey) {
+      logger.warn(`Skipping row ${video.rowNumber} because user column is empty`);
+      if (!config.dryRun) {
+        await repository.markFailed(video.rowNumber);
+      }
+      processed += 1;
+      continue;
+    }
 
-  try {
-    for (const video of videos) {
+    const explicitUser = config.users.find((u) => path.basename(u.chromeUserDataDir) === userKey);
+    const chromeUserDataDir = explicitUser
+      ? explicitUser.chromeUserDataDir
+      : path.resolve(config.commonProfilesDir, userKey);
+
+    // If the profile directory does not exist, treat as an error per user's request.
+    if (!fs.existsSync(chromeUserDataDir)) {
+      logger.error(`Profile not found for user ${userKey}: ${chromeUserDataDir}`);
+      if (!config.dryRun) {
+        await repository.markFailed(video.rowNumber);
+      }
+      processed += 1;
+      continue;
+    }
+
+    const profile = { name: userKey, chromeUserDataDir };
+    const context = await launchChromeProfile({ user: profile, headless: config.headless });
+
+    try {
+      // After launch, ensure navigation didn't redirect to login. If accessing the upload URL
+      // requires login (redirect), treat as error. Otherwise proceed.
+      const pages = context.pages();
+      const page = pages.find((p) => p.url().includes("tiktok")) || pages[pages.length - 1];
+
+      try {
+        await page.waitForLoadState("networkidle", { timeout: 10000 });
+      } catch (_) {
+        // ignore timeout and continue to check URL
+      }
+
+      const finalUrl = page.url();
+      const loginPattern = /login|signin|auth|accounts|authorize|appleid|oauth|challenge/i;
+      if (loginPattern.test(finalUrl)) {
+        logger.error(`Profile ${userKey} was redirected to login page ${finalUrl}`);
+        if (!config.dryRun) {
+          await repository.markFailed(video.rowNumber);
+        }
+        await context.close();
+        processed += 1;
+        continue;
+      }
+
       const videoPath = resolveVideoPath(config.videoRoot, video.video_path);
-      logger.info(`Processing video ${video.ID}`, { videoPath });
+      logger.info(`Processing video ${video.ID} for user ${userKey}`, { videoPath });
 
       try {
         assertFileExists(videoPath);
@@ -98,10 +126,12 @@ async function main() {
           await repository.markFailed(video.rowNumber);
         }
       }
+    } finally {
+      await context.close();
+      logger.info(`Log saved to ${logger.logFile}`);
     }
-  } finally {
-    await context.close();
-    logger.info(`Log saved to ${logger.logFile}`);
+
+    processed += 1;
   }
 }
 

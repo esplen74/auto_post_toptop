@@ -35,7 +35,7 @@ export async function uploadVideo({ context, video, videoPath, logger, dryRun, u
     logger.info(`Filled caption for ${video.ID}`);
   }
 
-  await sleep(3000);
+  await sleep(2000);
   
   // Wait for upload success before proceeding to sound editing
   await waitForUploadSuccess(page, logger);
@@ -137,7 +137,7 @@ async function editSound(page, logger) {
   await favoritesTab.click();
   logger.info("Selected Favorites tab.");
 
-  await sleep(3000);
+  await sleep(2000);
 
   const removeButton = page.locator(soundSelectors.removeOriginalSoundButton).first();
   if (await removeButton.isVisible()) {
@@ -179,7 +179,7 @@ async function saveMusicSelection(page, logger) {
   
   try {
     // Wait a moment so the save button appears after music selection
-    await sleep(2000);
+    await sleep(500);
     // Find Save button - handle both English and Vietnamese ("Save", "Lưu")
     const saveButton = page.locator("button:has-text('Lưu'), button:has-text('Save')").first();
     
@@ -187,11 +187,11 @@ async function saveMusicSelection(page, logger) {
       await saveButton.scrollIntoViewIfNeeded();
       await saveButton.click();
       logger.info("Clicked Save/Lưu button.");
-      await sleep(2000);
+      await sleep(500);
     } else {
       logger.warn("Save button not visible; checking if auto-saved...");
       // Sometimes music is auto-saved, wait a bit and check
-      await sleep(1000);
+      await sleep(500);
     }
   } catch (error) {
     logger.warn("Error finding Save button", { error: error.message });
@@ -202,49 +202,74 @@ async function checkForViolations(page, logger) {
   logger.info("Checking for copyright and content violations...");
   
   try {
-    // Wait for copyright check to complete
-    logger.info("Waiting for Music copyright check to complete...");
-    await page.waitForTimeout(3000); // Give page time to start checking
-    
-    // Look for copyright success indicator or violation
-    const copyrightSuccess = page.locator("div.status-success:has-text('No issues found')").first();
-    const copyrightError = page.locator("div.status-result:has-text('Content may be restricted')").first();
-    
-    let copyrightOk = false;
+    // After saving music selection, the page often reloads back to the upload view
+    // and performs background checks. Wait for navigation/idle then poll the
+    // page text to detect either a "checking" state or final results (Vietnamese/English).
     try {
-      await copyrightSuccess.waitFor({ state: "visible", timeout: 30000 });
-      copyrightOk = true;
-      logger.info("✓ Music copyright check: No issues found");
-    } catch {
-      const isError = await copyrightError.isVisible().catch(() => false);
-      if (isError) {
-        logger.error("✗ Music copyright check: Content has restrictions");
+      await page.waitForNavigation({ waitUntil: "networkidle", timeout: 10000 });
+    } catch (_) {
+      // navigation may not happen; continue
+    }
+
+    const CHECK_TIMEOUT_MS = 60000;
+    const POLL_INTERVAL_MS = 1000;
+    const start = Date.now();
+
+    const checkingPhrases = ["Đang kiểm tra", "Checking", "Checking for", "Đang kiểm tra."]; 
+    const okPhrases = [
+      "Không phát hiện vấn đề nào", // Vietnamese: No issues found
+      "No issues found",
+      "No issues detected"
+    ];
+
+    while (Date.now() - start < CHECK_TIMEOUT_MS) {
+      // First prefer checking DOM status elements if available.
+      const successCount = await page.locator(".status-result.status-success .status-tip").count().catch(() => 0);
+      const warnCount = await page.locator(".status-result.status-warn .status-tip").count().catch(() => 0);
+      const errorCount = await page.locator(".status-result.status-error .status-tip").count().catch(() => 0);
+
+      if (successCount >= 2) {
+        logger.info("✓ Both copyright and content checks passed - no issues found (DOM)");
+        return true;
+      }
+
+      if (warnCount > 0 || errorCount > 0) {
+        logger.error("✗ Detected restriction/warning/error in status elements");
         return false;
       }
-    }
-    
-    // Wait for content check lite to complete
-    logger.info("Waiting for Content check lite to complete...");
-    await page.waitForTimeout(2000);
-    
-    const contentSuccess = page.locator(".jsx-2629471817:has-text('No issues found')").first();
-    const contentError = page.locator(".jsx-2629471817:has-text('Content may be restricted')").first();
-    
-    let contentOk = false;
-    try {
-      await contentSuccess.waitFor({ state: "visible", timeout: 60000 });
-      contentOk = true;
-      logger.info("✓ Content check lite: No issues found");
-    } catch {
-      const isError = await contentError.isVisible().catch(() => false);
-      if (isError) {
-        logger.error("✗ Content check lite: Content has restrictions");
+
+      // Fallback to text scanning: if still checking, continue polling
+      const bodyText = await page.evaluate(() => document.body.innerText || "");
+      const normalized = (bodyText || "").toLowerCase();
+
+      if (checkingPhrases.some((p) => normalized.includes(p.toLowerCase()))) {
+        logger.info("Background checks in progress...");
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
+
+      // Fallback: Count OK phrases in text (both checks should show OK)
+      let okCount = 0;
+      for (const phrase of okPhrases) {
+        okCount += (bodyText.match(new RegExp(phrase, "gi")) || []).length;
+      }
+      if (okCount >= 2) {
+        logger.info("✓ Both copyright and content checks passed - no issues found (text)");
+        return true;
+      }
+
+      // If any other indicative word appears, fail
+      const failPhrases = ["hạn chế", "restricted", "lỗi", "error", "vi phạm", "violation"];
+      if (failPhrases.some((p) => normalized.includes(p.toLowerCase()))) {
+        logger.error("✗ Detected restriction or violation in page text (fallback)");
         return false;
       }
-      logger.warn("Content check lite still in progress or not found");
+
+      await sleep(POLL_INTERVAL_MS);
     }
-    
-    return copyrightOk && (contentOk || true); // contentOk can be true if still checking
+
+    logger.warn("Timeout waiting for content/music checks to complete - treating as failed");
+    return false;
     
   } catch (error) {
     logger.error("Error during violation check", { error: error.message });
