@@ -6,14 +6,15 @@ const REQUIRED_HEADERS = [
   "status",
   "posted_at",
   "scheduled_at",
-  "tiktok_url"
+  "note"
 ];
 
 export class VideoRepository {
-  constructor({ sheets, spreadsheetId, sheetName }) {
+  constructor({ sheets, spreadsheetId, sheetName, logger = console }) {
     this.sheets = sheets;
     this.spreadsheetId = spreadsheetId;
     this.sheetName = sheetName;
+    this.logger = logger;
   }
 
   async listRows() {
@@ -47,22 +48,50 @@ export class VideoRepository {
   async findPendingForUser(userName, limit) {
     const rows = await this.listRows();
     const now = new Date();
-    return rows
-      .filter((row) => row.video_path && row.video_path.trim() !== "")
-      .filter((row) => shouldPostStatus(row.status))
-      .filter((row) => isDue(row.scheduled_at, now))
-      .slice(0, limit);
+    const total = rows.length;
+    const withPath = rows.filter((row) => row.video_path && row.video_path.trim() !== "");
+    const withPathCount = withPath.length;
+    const notDone = withPath.filter((row) => shouldPostStatus(row.status));
+    const notDoneCount = notDone.length;
+    // Do not filter out future scheduled rows here; uploader will handle scheduling option.
+    const candidates = notDone;
+    const candidatesCount = candidates.length;
+    this.logger.info(`findPendingForUser: total=${total}, withPath=${withPathCount}, notDone=${notDoneCount}, candidates=${candidatesCount}`);
+
+    if (candidatesCount === 0) {
+      // log examples of excluded rows with reasons to help debugging
+      const excluded = rows.filter((r) => {
+        if (!r.video_path || String(r.video_path).trim() === "") return true;
+        if (!shouldPostStatus(r.status)) return true;
+        return false;
+      });  
+    }
+
+    return candidates.slice(0, limit);
   }
 
   async findPending(limit) {
     const rows = await this.listRows();
     const now = new Date();
+    const total = rows.length;
+    const withPath = rows.filter((row) => row.video_path && row.video_path.trim() !== "");
+    const withPathCount = withPath.length;
+    const notDone = withPath.filter((row) => shouldPostStatus(row.status));
+    const notDoneCount = notDone.length;
+    // Do not filter out future scheduled rows here; uploader will handle scheduling option.
+    const candidates = notDone;
+    const candidatesCount = candidates.length;
+    this.logger.info(`findPending: total=${total}, withPath=${withPathCount}, notDone=${notDoneCount}, candidates=${candidatesCount}`);
 
-    return rows
-      .filter((row) => row.video_path && row.video_path.trim() !== "")
-      .filter((row) => shouldPostStatus(row.status))
-      .filter((row) => isDue(row.scheduled_at, now))
-      .slice(0, limit);
+    if (candidatesCount === 0) {
+      const excluded = rows.filter((r) => {
+        if (!r.video_path || String(r.video_path).trim() === "") return true;
+        if (!shouldPostStatus(r.status)) return true;
+        return false;
+      });
+    }
+
+    return candidates.slice(0, limit);
   }
 
   async markUploading(rowNumber) {
@@ -71,18 +100,23 @@ export class VideoRepository {
     });
   }
 
-  async markPosted(rowNumber, tiktokUrl = "") {
+  async markPosted(rowNumber, note = "") {
     await this.updateCells(rowNumber, {
       status: "DONE",
       posted_at: new Date().toISOString(),
-      tiktok_url: tiktokUrl
+      note
     });
   }
 
-  async markFailed(rowNumber) {
-    await this.updateCells(rowNumber, {
+  async markFailed(rowNumber, note = "") {
+    const updates = {
       status: "ERROR"
-    });
+    };
+    if (note) {
+      updates.note = note;
+    }
+
+    await this.updateCells(rowNumber, updates);
   }
 
   async updateCells(rowNumber, updates) {
@@ -97,7 +131,11 @@ export class VideoRepository {
       const headers = (headerResp.data.values && headerResp.data.values[0]) || [];
 
       const data = Object.entries(updates).map(([header, value]) => {
-        const columnIndex = headers.indexOf(header);
+        let columnIndex = headers.indexOf(header);
+        if (columnIndex === -1 && header === "note") {
+          columnIndex = headers.indexOf("tiktok_url");
+        }
+
         if (columnIndex === -1) {
           throw new Error(`Unknown sheet header: ${header}`);
         }
@@ -123,7 +161,12 @@ export class VideoRepository {
 }
 
 function validateHeaders(headers) {
-  const missing = REQUIRED_HEADERS.filter((header) => !headers.includes(header));
+  const missing = REQUIRED_HEADERS.filter((header) => {
+    if (header === "note") {
+      return !headers.includes("note") && !headers.includes("tiktok_url");
+    }
+    return !headers.includes(header);
+  });
   if (missing.length > 0) {
     throw new Error(`Google Sheet is missing columns: ${missing.join(", ")}`);
   }

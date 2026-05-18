@@ -19,7 +19,8 @@ async function main() {
   const repository = new VideoRepository({
     sheets,
     spreadsheetId: config.googleSheetId,
-    sheetName: config.users[0].sheetName
+    sheetName: config.users[0].sheetName,
+    logger
   });
 
   // Process videos one-at-a-time to ensure a single failing row does not abort other rows.
@@ -96,7 +97,7 @@ async function main() {
           await repository.markUploading(video.rowNumber);
         }
 
-        const tiktokUrl = await retry(
+        const result = await retry(
           () =>
             uploadVideo({
               context,
@@ -118,7 +119,11 @@ async function main() {
         );
 
         if (!config.dryRun) {
-          await repository.markPosted(video.rowNumber, tiktokUrl);
+          if (result && result.success) {
+            await repository.markPosted(video.rowNumber, result.note);
+          } else {
+            await repository.markFailed(video.rowNumber, result ? result.note : "");
+          }
         }
       } catch (error) {
         logger.error(`Failed video ${video.ID}: ${error.message}`);
