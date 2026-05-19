@@ -108,3 +108,24 @@ Bạn muốn tôi thực hiện tiếp theo nào trong danh sách dưới đây?
 3) Viết module small để đọc sheet + dry-run và log kết quả.
 
 Nói tôi biết bạn chọn gì, tôi sẽ tiếp tục.
+
+
+## Giao diện hai nút
+Chạy giao diện với:
+
+```bash
+npm run ui
+```
+
+Trang sẽ mở ra với hai nút:
+- `Tải Douyin Video`: chạy flow download và dùng profile `/Users/lphee98/Auto_TopTop/chrome-profiles/auto-download`
+- `Upload TikTok`: chạy flow upload theo lệnh `npm run start`
+
+## Cách dùng hiện tại
+Chạy riêng lẻ nếu cần:
+
+```bash
+npm run download-douyin -- --profile=/Users/lphee98/Auto_TopTop/chrome-profiles/auto-download
+npm run start
+```
+

@@ -2,6 +2,7 @@
 
 import path from "node:path";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "../config/loadConfig.js";
 import { createLogger } from "../logging/logger.js";
 import { createSheetsClient } from "../google/sheetsClient.js";
@@ -11,10 +12,15 @@ import { uploadVideo } from "../tiktok/uploader.js";
 import { assertFileExists, resolveVideoPath } from "../utils/file.js";
 import { retry } from "../utils/retry.js";
 
+const __filename = fileURLToPath(import.meta.url);
+
 async function main() {
   const config = loadConfig();
   const logger = createLogger(config.rootDir);
+  await uploadPendingVideos({ config, logger });
+}
 
+export async function uploadPendingVideos({ config, logger }) {
   const sheets = await createSheetsClient(config.googleCredentialsPath);
   const repository = new VideoRepository({
     sheets,
@@ -105,7 +111,8 @@ async function main() {
               videoPath,
               logger,
               dryRun: config.dryRun,
-              uploadUrl: config.tiktokUploadUrl
+              uploadUrl: config.tiktokUploadUrl,
+              user: explicitUser
             }),
           {
             attempts: 2,
@@ -140,7 +147,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (process.argv[1] === __filename) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

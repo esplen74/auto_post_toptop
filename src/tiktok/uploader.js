@@ -9,7 +9,7 @@ const soundSelectors = {
   uploadSuccessIndicator: "div.info-status.success:has-text('Đã tải lên')"
 };
 
-export async function uploadVideo({ context, video, videoPath, logger, dryRun, uploadUrl }) {
+export async function uploadVideo({ context, video, videoPath, logger, dryRun, uploadUrl, user }) {
   // Reuse the page opened by launchChromeProfile instead of creating a new one
   const pages = context.pages();
   if (pages.length === 0) {
@@ -28,12 +28,13 @@ export async function uploadVideo({ context, video, videoPath, logger, dryRun, u
   await page.setInputFiles(selectors.fileInput, videoPath);
   logger.info(`Selected video file for ${video.ID}`);
 
-  if (video.caption) {
+  const captionText = buildCaptionWithProfileHashtags(video.caption, user);
+  if (captionText) {
     const captionLocator = page.locator(selectors.captionEditor).first();
     await captionLocator.waitFor({ state: "visible", timeout: 10000 });
     await captionLocator.click();
     await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
-    await page.keyboard.type(video.caption, { delay: 20 });
+    await page.keyboard.type(captionText, { delay: 20 });
     logger.info(`Filled caption for ${video.ID}`);
   }
 
@@ -152,12 +153,7 @@ export async function uploadVideo({ context, video, videoPath, logger, dryRun, u
       logger.warn(`Cannot parse scheduled_at value: ${scheduledAtRaw}; leaving as Now.`);
     }
   } else {
-    // Ensure Now is selected
-    const nowRadio = page.locator("input[name='postSchedule'][value='post_now']").first();
-    if ((await nowRadio.count()) > 0) {
-      await nowRadio.click().catch(() => nowRadio.evaluate((el) => el.click()));
-      logger.info('No schedule provided; set to Now.');
-    }
+    await clickScheduleButtonOnly(page, logger);
   }
 
   // Check for copyright and content violations
@@ -172,16 +168,43 @@ export async function uploadVideo({ context, video, videoPath, logger, dryRun, u
   }
 
   await sleep(2000);
-  
-  // TEST MODE: Skip clicking post button to allow manual verification
-  logger.info(`⚠️ TEST MODE: Ready to post but skipping Post button click for verification`);
-  logger.info(`📸 Verify the video, caption, and sound selection before clicking Post manually`);
-  
-  // Uncomment the lines below to actually post:
-  // await page.locator(selectors.postButton).first().click();
-  // logger.info(`Clicked post button for ${video.ID}`);
-  // await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
-  
+
+  const postButtons = page.locator(selectors.postButton);
+  const textPattern = video && video.scheduled_at
+    ? /Lên lịch|Schedule|Đăng bài|Đăng/i
+    : /Đăng bài|Đăng|Post|Publish/i;
+  const postButtonByText = postButtons.filter({ hasText: textPattern }).first();
+  const matchingCount = await postButtonByText.count();
+  logger.info(`Found ${matchingCount} localized post button(s) for text pattern ${textPattern}`);
+
+  const postButton = matchingCount > 0 ? postButtonByText : postButtons.first();
+  if (matchingCount === 0) {
+    logger.warn(
+      "Localized post button text not found; falling back to the first post_video_button element."
+    );
+  }
+
+  await postButton.waitFor({ state: "visible", timeout: 20000 });
+
+  const startUrl = page.url();
+  const navigationPromise = page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => null);
+  await postButton.click();
+  logger.info(`Clicked post button for ${video.ID}`);
+
+  await navigationPromise;
+  const finalUrl = page.url();
+  const redirectedToStudio = finalUrl.includes("/tiktokstudio/content") || finalUrl.includes("/tiktokstudio");
+
+  if (redirectedToStudio) {
+    logger.info(`Detected redirect to TikTok Studio content page after posting: ${finalUrl}`);
+    return {
+      success: true,
+      note: violationResult.note || `Completed by redirect to ${finalUrl}`
+    };
+  }
+
+  await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
+
   return {
     success: true,
     note: violationResult.note || "Uploaded successfully"
@@ -201,6 +224,21 @@ async function waitForUploadSuccess(page, logger) {
       { error: error.message }
     );
   }
+}
+
+function buildCaptionWithProfileHashtags(caption, user) {
+  const baseCaption = String(caption || "").trim();
+  const rawHashtags =
+    user?.hashtag ||
+    user?.hashtags ||
+    user?.tags ||
+    user?.captionHashtags;
+  const hashtagsText = Array.isArray(rawHashtags)
+    ? rawHashtags.join(" ")
+    : String(rawHashtags);
+  const trimmedHashtags = hashtagsText.trim();
+  if (!trimmedHashtags) return baseCaption;
+  return baseCaption ? `${baseCaption} ${trimmedHashtags}` : trimmedHashtags;
 }
 
 async function editSound(page, logger) {
@@ -304,10 +342,8 @@ async function saveMusicSelection(page, logger) {
     if (await saveButton.isVisible({ timeout: 5000 }).catch(() => false)) {
       await saveButton.click();
       logger.info("Clicked Save/Lưu button.");
-      await Promise.all([
-        page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {}),
-        page.waitForSelector(selectors.fileInput, { timeout: 1000 }).catch(() => {})
-      ]);
+      await saveButton.waitFor({ state: "detached", timeout: 2000 }).catch(() => {});
+      await sleep(500);
     } else {
       logger.warn("Save button not visible; checking if auto-saved...");
       // Sometimes music is auto-saved, wait a bit and check
@@ -316,6 +352,26 @@ async function saveMusicSelection(page, logger) {
   } catch (error) {
     logger.warn("Error finding Save button", { error: error.message });
   }
+}
+
+async function clickScheduleButtonOnly(page, logger) {
+  logger.info("Opening schedule panel for now-post flow...");
+
+  const scheduleButtons = page.locator(
+    "button:has-text('Lên lịch'), button:has-text('Đặt lịch'), button:has-text('Schedule'), button:has-text('Set schedule')"
+  );
+  const count = await scheduleButtons.count();
+
+  if (count === 0) {
+    logger.warn("No schedule button found for now-post flow.");
+    return;
+  }
+
+  const targetButton = count > 1 ? scheduleButtons.nth(1) : scheduleButtons.first();
+  await targetButton.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+  await targetButton.click().catch(() => targetButton.evaluate((el) => el.click()));
+  logger.info(`Clicked schedule button for now-post flow (index ${count > 1 ? 2 : 1}).`);
+  await sleep(500);
 }
 
 function formatDateForInput(isoDate) {
@@ -413,7 +469,7 @@ async function checkForViolations(page, logger) {
   try {
     // After saving music selection, the page may refresh or show a background check state.
     try {
-      await page.waitForNavigation({ waitUntil: "networkidle", timeout: 10000 });
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 5000 });
     } catch (_) {
       // navigation may not happen; continue polling the current page state
     }
@@ -452,7 +508,7 @@ async function checkForViolations(page, logger) {
     ];
 
     await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-    await page.waitForSelector(".status-result:visible, .status-tip:visible", { timeout: 15000 }).catch(() => {});
+    await page.waitForSelector(".status-result, .status-tip", { timeout: 15000 }).catch(() => {});
 
     let visibleStatusSummary = "";
     let bodyText = "";
@@ -469,10 +525,35 @@ async function checkForViolations(page, logger) {
         continue;
       }
 
-      const successCount = await page.locator(".status-result.status-success:visible .status-tip").count().catch(() => 0);
-      const warnCount = await page.locator(".status-result.status-warn:visible .status-tip").count().catch(() => 0);
-      const errorCount = await page.locator(".status-result.status-error:visible .status-tip").count().catch(() => 0);
-      const visibleStatusTexts = await page.locator(".status-result:visible .status-tip").allTextContents().catch(() => []);
+      const statusResult = await page.evaluate(() => {
+        const isVisible = (el) => {
+          const style = window.getComputedStyle(el);
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            el.offsetWidth > 0 &&
+            el.offsetHeight > 0
+          );
+        };
+
+        const gatherTexts = (selector) =>
+          Array.from(document.querySelectorAll(selector))
+            .filter(isVisible)
+            .map((el) => el.innerText.trim())
+            .filter(Boolean);
+
+        return {
+          success: gatherTexts(".status-result.status-success .status-tip"),
+          warn: gatherTexts(".status-result.status-warn .status-tip"),
+          error: gatherTexts(".status-result.status-error .status-tip"),
+          all: gatherTexts(".status-result .status-tip")
+        };
+      });
+
+      const successCount = statusResult.success.length;
+      const warnCount = statusResult.warn.length;
+      const errorCount = statusResult.error.length;
+      const visibleStatusTexts = statusResult.all;
       visibleStatusSummary = visibleStatusTexts.join(" | ").trim();
 
       note = visibleStatusSummary || bodyText.trim();

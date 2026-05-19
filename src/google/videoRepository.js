@@ -103,7 +103,7 @@ export class VideoRepository {
   async markPosted(rowNumber, note = "") {
     await this.updateCells(rowNumber, {
       status: "DONE",
-      posted_at: new Date().toISOString(),
+      posted_at: formatLocalPostedAt(),
       note
     });
   }
@@ -158,6 +158,14 @@ export class VideoRepository {
       }
     });
   }
+}
+
+function formatLocalPostedAt() {
+  const now = new Date();
+  return now.toLocaleString("sv-SE", {
+    hour12: false,
+    timeZone: process.env.POSTED_AT_TIMEZONE || undefined
+  });
 }
 
 function validateHeaders(headers) {

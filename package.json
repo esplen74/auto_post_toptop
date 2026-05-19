@@ -7,7 +7,9 @@
     "start": "node src/cli/index.js",
     "dry-run": "cross-env DRY_RUN=true node src/cli/index.js",
     "inspect-upload": "node src/cli/inspectUpload.js",
-    "inspect-upload:quan-ao": "cross-env node src/cli/inspectUpload.js --user=ao_quan"
+    "inspect-upload:quan-ao": "cross-env node src/cli/inspectUpload.js --user=ao_quan",
+    "download-douyin": "node src/cli/downloadDouyin.js",
+    "ui": "node src/cli/ui.js"
   },
   "dependencies": {
     "@inquirer/prompts": "^7.0.0",
