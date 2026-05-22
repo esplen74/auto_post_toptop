@@ -36,6 +36,8 @@ export async function uploadVideo({ context, video, videoPath, logger, dryRun, u
     await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
     await page.keyboard.type(captionText, { delay: 20 });
     logger.info(`Filled caption for ${video.ID}`);
+    // After typing caption, prefer selecting hashtags from the caption history
+    await clickHashtagHistory(page, logger).catch(() => {});
   }
 
   await sleep(2000);
@@ -124,25 +126,13 @@ export async function uploadVideo({ context, video, videoPath, logger, dryRun, u
         // Give the UI a moment after selecting the Schedule option so it doesn't overwrite our values
         await sleep(2000);
 
-        // Locate inputs and try to detect which is time and which is date by existing value
         const inputs = page.locator('.scheduled-picker input.TUXTextInputCore-input');
-        const icount = await inputs.count();
-        let timeInput = null;
-        let dateInput = null;
-        for (let i = 0; i < icount; i++) {
-          const attr = (await inputs.nth(i).getAttribute('value')) || '';
-          if (/^\d{1,2}:\d{2}$/.test(attr)) timeInput = inputs.nth(i);
-          if (/^\d{4}-\d{2}-\d{2}$/.test(attr) || /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(attr)) dateInput = inputs.nth(i);
-        }
-
-        // Fallback: assume first is time, second is date
-        if (!timeInput && icount >= 1) timeInput = inputs.nth(0);
-        if (!dateInput && icount >= 2) dateInput = inputs.nth(1);
+        const { timeInput, dateInput } = await identifyScheduleInputs(inputs, logger);
 
         if (timeInput && dateInput) {
-          await setScheduleInputs({ timeInput, dateInput }, timeStr, isoDate, logger);
+          await setSchedulePickers(page, { timeInput, dateInput }, timeStr, isoDate, logger);
           logger.info(`Scheduled post (request): ${isoDate} ${timeStr} (from sheet: ${scheduledAtRaw})`);
-          await sleep(500);
+          await sleep(800);
         } else {
           logger.warn('Schedule inputs not found or incomplete after opening scheduler.');
         }
@@ -197,6 +187,16 @@ export async function uploadVideo({ context, video, videoPath, logger, dryRun, u
 
   if (redirectedToStudio) {
     logger.info(`Detected redirect to TikTok Studio content page after posting: ${finalUrl}`);
+    // Wait a short moment so any final UI activity completes, then return.
+    try {
+      logger.info('Waiting 3s after redirect before continuing');
+      await sleep(3000);
+    } catch (err) {
+      logger.warn('Sleep interrupted', { error: err.message });
+    }
+
+    // Do NOT close the page or context here — return success so the caller's
+    // loop can continue to the next video while keeping the browser open.
     return {
       success: true,
       note: violationResult.note || `Completed by redirect to ${finalUrl}`
@@ -228,17 +228,51 @@ async function waitForUploadSuccess(page, logger) {
 
 function buildCaptionWithProfileHashtags(caption, user) {
   const baseCaption = String(caption || "").trim();
-  const rawHashtags =
-    user?.hashtag ||
-    user?.hashtags ||
-    user?.tags ||
-    user?.captionHashtags;
-  const hashtagsText = Array.isArray(rawHashtags)
-    ? rawHashtags.join(" ")
-    : String(rawHashtags);
-  const trimmedHashtags = hashtagsText.trim();
-  if (!trimmedHashtags) return baseCaption;
-  return baseCaption ? `${baseCaption} ${trimmedHashtags}` : trimmedHashtags;
+  // Previously we pulled hashtags from the profile config here.
+  // New behavior: do not auto-append config hashtags. Hashtags will be
+  // inserted by clicking items from the caption history UI after typing.
+  return baseCaption;
+}
+
+async function clickHashtagHistory(page, logger, maxToClick = 8) {
+  try {
+    // Wait briefly for history container to render
+    await sleep(500);
+    const historyItems = page.locator('.caption-history .suggest-item');
+    const initialCount = Math.min(await historyItems.count(), 10);
+    logger.info(`Found ${initialCount} hashtag history items (capped at 10)`);
+
+    let clicked = 0;
+    // Click the first element repeatedly, since TikTok removes a tag from history when selected
+    for (let i = 0; i < initialCount && clicked < maxToClick; i++) {
+      const first = page.locator('.caption-history .suggest-item').first();
+      const exists = await first.count();
+      if (!exists) break;
+      const text = (await first.textContent()) || '';
+      const tag = text.trim();
+      if (!tag || !tag.startsWith('#')) {
+        // If the first item isn't a hashtag, skip it and try next
+        await first.click({ force: true }).catch(() => {});
+        await sleep(200);
+        continue;
+      }
+
+      logger.info(`Clicking (first) hashtag history item: ${tag} (iteration ${i + 1})`);
+      try {
+        await first.click({ force: true });
+        clicked++;
+        await sleep(300);
+      } catch (err) {
+        logger.warn('Failed to click history hashtag', { tag, error: err.message });
+      }
+    }
+
+    logger.info(`Clicked ${clicked} hashtag(s) from history`);
+    return clicked;
+  } catch (err) {
+    logger.warn('clickHashtagHistory failed', { error: err.message });
+    return 0;
+  }
 }
 
 async function editSound(page, logger) {
@@ -254,6 +288,9 @@ async function editSound(page, logger) {
 
   // await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
   await sleep(2000);
+
+  // sleep để thêm nhạc yêu thích thủ công
+  // await sleep(360000);
 
   logger.info("Waiting for Favorites tab...");
 
@@ -376,7 +413,7 @@ async function clickScheduleButtonOnly(page, logger) {
 
 function formatDateForInput(isoDate) {
   const [year, month, day] = isoDate.split("-");
-  return `${day}/${month}/${year}`;
+  return `${year}-${month}-${day}`;
 }
 
 function selectInputRole(inputMeta) {
@@ -433,34 +470,118 @@ async function identifyScheduleInputs(inputs, logger) {
   return { timeInput, dateInput };
 }
 
-async function setScheduleInputs({ timeInput, dateInput }, timeStr, isoDate, logger) {
+async function setSchedulePickers(page, { timeInput, dateInput }, timeStr, isoDate, logger) {
   const altDate = formatDateForInput(isoDate);
 
-  const setValue = async (input, value) => {
-    await input.evaluate((el, v) => {
-      el.removeAttribute('readonly');
-      el.value = v;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      el.blur();
-    }, value);
-  };
-
-  await setValue(timeInput, timeStr);
-  await setValue(dateInput, isoDate);
-  await sleep(200);
-
-  let finalTime = await timeInput.getAttribute('value').catch(() => null);
-  let finalDate = await dateInput.getAttribute('value').catch(() => null);
-
-  if (finalDate !== isoDate && finalDate !== altDate) {
-    logger.info("Date input did not accept ISO date, retrying with local format", { finalDate, isoDate, altDate });
-    await setValue(dateInput, altDate);
-    await sleep(200);
-    finalDate = await dateInput.getAttribute('value').catch(() => null);
+  if (dateInput) {
+    await setDatePicker(page, dateInput, isoDate, logger);
+  }
+  if (timeInput) {
+    await setTimePicker(page, timeInput, timeStr, logger);
   }
 
-  logger.info(`Scheduled values after write: date=${finalDate}, time=${finalTime}`);
+  await page.evaluate(() => {
+    const active = document.activeElement;
+    if (active) active.blur();
+  });
+  await sleep(1000);
+
+  const finalTime = timeInput ? await timeInput.getAttribute('value').catch(() => null) : null;
+  let finalDate = dateInput ? await dateInput.getAttribute('value').catch(() => null) : null;
+
+  if (dateInput && finalDate !== isoDate && finalDate !== altDate) {
+    logger.info('Date input after picker did not persist, falling back to direct value', { finalDate, isoDate, altDate });
+    await setInputValue(dateInput, altDate);
+    await sleep(1000);
+    finalDate = await dateInput.getAttribute('value').catch(() => null);
+    
+    // If value is still not correct, try one more time
+    if (finalDate !== isoDate && finalDate !== altDate) {
+      logger.info('Date value still incorrect after setInputValue, retrying...', { finalDate, isoDate, altDate });
+      await setInputValue(dateInput, altDate);
+      await sleep(1000);
+      finalDate = await dateInput.getAttribute('value').catch(() => null);
+    }
+  }
+
+  logger.info(`Scheduled values after picker: date=${finalDate}, time=${finalTime}`);
+}
+
+async function setTimePicker(page, timeInput, timeStr, logger) {
+  const [hour, minute] = timeStr.split(":");
+  await timeInput.click({ force: true }).catch(() => {});
+  await sleep(2000);
+
+  const timePickerVisible = await page.locator('.tiktok-timepicker-time-picker-container:not(.tiktok-timepicker-invisible)').first();
+  if (!(await timePickerVisible.count())) {
+    await page.waitForSelector('.tiktok-timepicker-time-picker-container', { timeout: 3000 }).catch(() => {});
+  }
+
+  const hourLocator = page.locator('.tiktok-timepicker-option-text.tiktok-timepicker-left', { hasText: hour });
+  if (await hourLocator.count()) {
+    await hourLocator.first().click().catch(() => {});
+  }
+
+  const minuteLocator = page.locator('.tiktok-timepicker-option-text.tiktok-timepicker-right', { hasText: minute });
+  if (await minuteLocator.count()) {
+    await minuteLocator.first().click().catch(() => {});
+  }
+
+  await page.click('body', { force: true }).catch(() => {});
+  await sleep(200);
+  logger.info(`Time picker set to ${timeStr}`);
+}
+
+async function setDatePicker(page, dateInput, isoDate, logger) {
+  const [year, month, day] = isoDate.split("-");
+  const dateStr = `${year}-${month}-${day}`;
+  
+  logger.info(`Opening date picker to select day ${day}`);
+  
+  // Click to open picker
+  await dateInput.click({ force: true }).catch(() => {});
+  await sleep(1500);
+  
+  // Try to find and click the day in the picker
+  // Look for span with class "day" containing the day number
+  const dayElements = page.locator('span.day');
+  const dayCount = await dayElements.count();
+  logger.info(`Found ${dayCount} day elements in picker`);
+  
+  // Find the day with text matching our target day
+  let dayClicked = false;
+  for (let i = 0; i < dayCount; i++) {
+    const dayText = await dayElements.nth(i).textContent().catch(() => null);
+    if (dayText && dayText.trim() === day) {
+      logger.info(`Found matching day ${day} at index ${i}, clicking...`);
+      await dayElements.nth(i).click().catch(() => {});
+      dayClicked = true;
+      await sleep(500);
+      break;
+    }
+  }
+  
+  if (!dayClicked) {
+    logger.warn(`Could not find day ${day} in picker, will try direct value set`);
+    // Fallback: click outside to close picker and set value directly
+    await page.click('body').catch(() => {});
+    await sleep(300);
+    await setInputValue(dateInput, dateStr);
+  }
+  
+  await sleep(500);
+  const finalValue = await dateInput.getAttribute('value').catch(() => null);
+  logger.info(`Date after picker selection: ${finalValue}`);
+}
+
+async function setInputValue(input, value) {
+  await input.evaluate((el, v) => {
+    el.removeAttribute('readonly');
+    el.value = v;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.blur();
+  }, value);
 }
 
 async function checkForViolations(page, logger) {
